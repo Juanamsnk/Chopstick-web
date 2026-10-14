@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chopsticks</title>
+<style>
+:root{--bg:#f6f3ee;--card:#fff;--ink:#222;--mute:#777;--acc:#e8590c;--ok:#2f9e44;--out:#d0d0d0;--line:#e3ddd3;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#18181b;--card:#25252a;--ink:#f0f0f0;--mute:#9a9a9a;--acc:#ff922b;--ok:#51cf66;--out:#44444a;--line:#38383f}}
+:root[data-theme="dark"]{--bg:#18181b;--card:#25252a;--ink:#f0f0f0;--mute:#9a9a9a;--acc:#ff922b;--ok:#51cf66;--out:#44444a;--line:#38383f}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:780px;margin:0 auto;padding:16px}
+h1{text-align:center;margin:8px 0 4px;font-size:1.8rem}
+.sub{text-align:center;color:var(--mute);margin:0 0 16px}
+.card{background:var(--card);border:3px solid var(--line);border-radius:16px;padding:14px;margin-bottom:12px}
+button{font:inherit;cursor:pointer;border:0;border-radius:10px;padding:10px 16px;background:var(--acc);color:#fff;font-weight:600}
+button.sec{background:transparent;color:var(--ink);border:2px solid var(--line)}
+button.big{width:100%;padding:16px;font-size:1.1rem;margin-bottom:10px}
+button:disabled{opacity:.45;cursor:not-allowed}
+input[type=text]{font:inherit;padding:10px;border-radius:8px;border:2px solid var(--line);background:var(--bg);color:var(--ink);width:100%;margin:4px 0}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.center{justify-content:center}
+label{display:block;margin:8px 0}
+#banner{border-radius:16px;padding:14px;text-align:center;color:#fff;margin-bottom:12px;position:sticky;top:env(safe-area-inset-top,0px);z-index:5;box-shadow:0 4px 14px rgba(0,0,0,.25)}
+#banner .t{font-size:1.5rem;font-weight:800}
+#banner .h{opacity:.95;margin-top:2px}
+#banner.wait{filter:saturate(.5) brightness(.9)}
+.log{text-align:center;color:var(--mute);min-height:1.5em;margin:6px 0 12px}
+.players{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.pl{border-color:var(--line);transition:.2s}
+.pl.turn{border-width:4px;transform:scale(1.02)}
+.pl.idle{opacity:.7}
+.pl.dead{opacity:.35}
+.pl h3{margin:0 0 8px;display:flex;justify-content:space-between;align-items:center;font-size:1.05rem}
+.dot{display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:6px}
+.badge{color:#fff;font-size:.75rem;padding:3px 8px;border-radius:99px;font-weight:700}
+.hands{display:flex;gap:10px}
+.hand{flex:1;background:var(--bg);color:var(--ink);border:3px solid var(--line);border-radius:14px;padding:8px 4px;display:flex;flex-direction:column;align-items:center;gap:4px}
+.hand.pick{border-color:var(--acc)}
+.hand.sel{background:color-mix(in srgb,var(--acc) 18%,var(--bg));transform:translateY(-4px)}
+.hand.target{border-color:var(--ok)}
+.hand.out{background:var(--out);cursor:default;animation:none}
+.fingers{display:flex;gap:4px;align-items:flex-end;height:52px}
+.f{width:12px;border-radius:6px 6px 2px 2px;background:#f4b183;border:2px solid #c9784a}
+.f.up{height:48px}.f.dn{height:14px;opacity:.35}
+.num{font-size:1.2rem;font-weight:700}
+.palm{width:70px;height:16px;border-radius:0 0 12px 12px;background:#f4b183;border:2px solid #c9784a;margin-top:-4px}
+.out .f,.out .palm{background:#999;border-color:#777}
+.splitbox{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.code{font-size:2.6rem;font-weight:800;letter-spacing:.3em;text-align:center;margin:6px 0}
+.err{color:#e03131;text-align:center;margin:6px 0}
+.win{font-size:1.5rem;text-align:center}
+</style>
+</head>
+<body>
+<main>
+<h1>🥢 Chopsticks</h1>
+<p class="sub">El juego de dedos: elimina todas las manos rivales</p>
+<div id="app"></div>
+</main>
+<script>
+const app=document.getElementById('app');
+const COL=['#e8590c','#1c7ed6','#2f9e44','#ae3ec9'];
+let V='menu',S={n:2,names:['Jugador 1','Jugador 2','Jugador 3','Jugador 4'],split:true,myName:'',joinCode:'',err:''};
+let G=null,sel=null,splitting=false,ON=null,DB=null,MYID=null;
+
+(async()=>{try{
+  const db=await claude.use('db'),us=await claude.use('user');
+  if(db&&us){MYID=await us.id();try{S.myName=(await us.me()).name||''}catch(e){} if(MYID){DB=db;if(V==='menu')render()}}
+}catch(e){}})();
+
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const alive=p=>p.hands[0]>0||p.hands[1]>0;
+const go=v=>{V=v;S.err='';render()};
+
+/* ---------- lógica ---------- */
+const clone=o=>JSON.parse(JSON.stringify(o));
+function advance(g){
+  const left=g.players.filter(alive);
+  if(left.length<=1){g.status='over';g.winner=g.players.findIndex(alive);return}
+  do{g.turn=(g.turn+1)%g.players.length}while(!alive(g.players[g.turn]));
+}
+function mineNow(){
+  if(!G||G.status!=='play')return false;
+  return ON?G.players[G.turn].uid===MYID:true;
+}
+function commit(g){
+  sel=null;splitting=false;G=g;render();
+  if(ON)ON.ref.set(g).catch(()=>{S.err='No se pudo enviar la jugada';render()});
+}
+function splitOptions(p){
+  const t=p.hands[0]+p.hands[1],r=[];
+  for(let a=1;a<=4;a++){const b=t-a;if(b>=1&&b<=4&&!(a===p.hands[0]&&b===p.hands[1]))r.push([a,b])}
+  return r;
+}
+function doSplit(a,b){
+  const g=clone(G),p=g.players[g.turn];p.hands=[a,b];
+  g.msg=`${p.name} repartió sus dedos: ${a} / ${b}`;advance(g);commit(g);
+}
+function clickHand(pi,hi){
+  if(!mineNow()||splitting)return;
+  const p=G.players[pi];if(p.hands[hi]===0)return;
+  if(pi===G.turn){sel=sel===hi?null:hi;render();return}
+  if(sel===null)return;
+  const g=clone(G),att=g.players[g.turn],tg=g.players[pi];
+  const v=tg.hands[hi]+att.hands[sel],k=v===5,nv=v>5?v-5:v;
+  tg.hands[hi]=k?0:nv;
+  g.msg=`${att.name} tocó a ${tg.name}: ${k?'¡mano eliminada! 💥':'ahora tiene '+nv+' dedos'}`;
+  advance(g);commit(g);
+}
+
+/* ---------- vistas ---------- */
+function render(){
+  if(V==='menu')return menu();
+  if(V==='off')return offSetup();
+  if(V==='on')return onMenu();
+  if(V==='game')return G&&G.status==='lobby'?lobby():game();
+}
+function menu(){
+  document.title='Chopsticks';
+  app.innerHTML=`<div class="card"><button class="big" onclick="go('off')">📱 Modo offline<br><small style="font-weight:400">Varios jugadores en el mismo dispositivo</small></button>
+  <button class="big" ${DB?'':'disabled'} onclick="go('on')">🌐 Modo online<br><small style="font-weight:400">${DB?'Cada jugador en su dispositivo':'Requiere abrir el enlace con sesión iniciada'}</small></button></div>${rules()}`;
+}
+function rules(){return `<div class="card"><b>Reglas</b><ul style="margin:6px 0;padding-left:20px;line-height:1.5">
+<li>Todos empiezan con 1 dedo en cada mano.</li><li>En tu turno, elige una de tus manos y toca una mano rival: esta suma tus dedos.</li>
+<li>Con exactamente 5 dedos, la mano queda eliminada. Si te pasas de 5, te quedas con el resto (por ejemplo, 3 + 3 = 1 dedo).</li><li>Si está permitido, en vez de atacar puedes repartir tus dedos entre tus manos.</li>
+<li>Gana el último jugador con alguna mano activa.</li></ul></div>`}
+function offSetup(){
+  let h='<div class="card"><b>Número de jugadores</b><div class="row" style="margin:8px 0">';
+  for(let i=2;i<=4;i++)h+=`<button class="${S.n===i?'':'sec'}" onclick="S.n=${i};render()">${i}</button>`;
+  h+='</div>';
+  for(let i=0;i<S.n;i++)h+=`<input type="text" maxlength="14" value="${esc(S.names[i])}" oninput="S.names[${i}]=this.value" aria-label="Nombre ${i+1}">`;
+  h+=`<label><input type="checkbox" ${S.split?'checked':''} onchange="S.split=this.checked"> Permitir repartir dedos</label>
+  <div class="row"><button onclick="startOff()">Empezar</button><button class="sec" onclick="go('menu')">Volver</button></div></div>`;
+  app.innerHTML=h;
+}
+function startOff(){
+  ON=null;
+  G={players:[],turn:0,status:'play',split:S.split,msg:'¡Empieza la partida!',winner:-1};
+  for(let i=0;i<S.n;i++)G.players.push({name:(S.names[i]||'').trim()||'Jugador '+(i+1),hands:[1,1],uid:''});
+  sel=null;splitting=false;V='game';render();
+}
+function onMenu(){
+  app.innerHTML=`<div class="card"><b>Tu nombre</b><input type="text" maxlength="14" value="${esc(S.myName)}" oninput="S.myName=this.value" placeholder="Tu nombre">
+  <label><input type="checkbox" ${S.split?'checked':''} onchange="S.split=this.checked"> Permitir repartir dedos (al crear)</label>
+  <button class="big" onclick="createGame()">➕ Crear partida</button>
+  <b>…o únete con un código</b><input type="text" maxlength="4" value="${esc(S.joinCode)}" oninput="S.joinCode=this.value.toUpperCase()" placeholder="CÓDIGO" style="text-transform:uppercase;letter-spacing:.3em;text-align:center">
+  <div class="row"><button onclick="joinGame()">Unirme</button><button class="sec" onclick="go('menu')">Volver</button></div>
+  <div class="err">${esc(S.err)}</div></div>`;
+}
+const myNm=()=>(S.myName||'').trim()||'Jugador';
+async function createGame(){
+  try{
+    const A='ABCDEFGHJKMNPQRSTUVWXYZ';let code,ref;
+    for(let t=0;t<5;t++){code=Array.from({length:4},()=>A[Math.random()*A.length|0]).join('');ref=DB.doc('games/'+code);if(!(await ref.get()).exists)break}
+    await ref.set({players:[{name:myNm(),hands:[1,1],uid:MYID}],turn:0,status:'lobby',split:S.split,msg:'',winner:-1});
+    enter(code);
+  }catch(e){S.err='No se pudo crear la partida';render()}
+}
+async function joinGame(){
+  const code=(S.joinCode||'').trim().toUpperCase();
+  try{
+    const ref=DB.doc('games/'+code),s=await ref.get();
+    if(!s.exists){S.err='No existe esa partida';return render()}
+    const g=s.data();
+    if(!g.players.some(p=>p.uid===MYID)){
+      if(g.status!=='lobby'){S.err='La partida ya empezó';return render()}
+      if(g.players.length>=4){S.err='Partida llena (máx. 4)';return render()}
+      g.players.push({name:myNm(),hands:[1,1],uid:MYID});await ref.update({players:g.players});
+    }
+    enter(code);
+  }catch(e){S.err='No se pudo unir';render()}
+}
+function enter(code){
+  if(ON&&ON.unsub)ON.unsub();
+  const ref=DB.doc('games/'+code);ON={code,ref,unsub:null};
+  ON.unsub=ref.onSnapshot(s=>{
+    if(!s.exists)return;const g=s.data();
+    if(!G||G.turn!==g.turn||G.status!==g.status){sel=null;splitting=false}
+    G=g;V='game';render();
+  });
+}
+function leave(){if(ON&&ON.unsub)ON.unsub();ON=null;G=null;go('menu')}
+function lobby(){
+  const host=G.players[0].uid===MYID;
+  document.title='Chopsticks · sala';
+  app.innerHTML=`<div class="card"><div style="text-align:center">Código de la partida</div><div class="code">${ON.code}</div>
+  <p class="sub">Tu amigo debe abrir este mismo enlace y pulsar «Unirme» con este código.</p>
+  ${G.players.map((p,i)=>`<div style="padding:6px"><span class="dot" style="background:${COL[i]}"></span>${esc(p.name)}${p.uid===MYID?' (tú)':''}${i===0?' 👑':''}</div>`).join('')}
+  <div class="row center" style="margin-top:10px">${host?`<button ${G.players.length<2?'disabled':''} onclick="startOn()">Empezar (${G.players.length}/4)</button>`:'<span class="sub">Esperando a que el anfitrión empiece…</span>'}<button class="sec" onclick="leave()">Salir</button></div></div>`;
+}
+function startOn(){
+  const g=clone(G);g.status='play';g.turn=0;g.msg='¡Empieza la partida!';g.winner=-1;
+  g.players.forEach(p=>p.hands=[1,1]);ON.ref.set(g);
+}
+function handHTML(p,pi,hi){
+  const n=p.hands[hi],out=n===0,mine=mineNow();
+  let c='hand'+(out?' out':'');
+  if(mine&&pi===G.turn&&!out){c+=sel===hi?' sel':(sel===null&&!splitting?' pick':'')}
+  if(mine&&pi!==G.turn&&!out&&sel!==null&&!splitting)c+=' target';
+  let f='';for(let k=0;k<4;k++)f+=`<div class="f ${k<n?'up':'dn'}"></div>`;
+  return `<button class="${c}" ${out||G.status!=='play'?'disabled':''} onclick="clickHand(${pi},${hi})" aria-label="${esc(p.name)} mano ${hi+1}"><div class="fingers">${f}</div><div class="palm"></div><div class="num">${out?'✖':n}</div></button>`;
+}
+function game(){
+  const cur=G.players[G.turn],mine=mineNow(),over=G.status==='over',col=COL[G.turn];
+  let b;
+  if(over){const w=G.players[G.winner];b=`<div id="banner" style="background:${COL[G.winner]}"><div class="t">🏆 ¡${esc(w.name)} gana!</div>${ON&&w.uid===MYID?'<div class="h">¡Has ganado!</div>':''}</div>`;document.title='🏆 Fin'}
+  else if(ON){
+    b=mine?`<div id="banner" style="background:${col}"><div class="t">🎯 ¡Es tu turno!</div><div class="h">${hint()}</div></div>`
+      :`<div id="banner" class="wait" style="background:${col}"><div class="t">⏳ Turno de ${esc(cur.name)}</div><div class="h">Espera tu turno…</div></div>`;
+    document.title=mine?'🎯 ¡Tu turno!':'Chopsticks';
+  }else{b=`<div id="banner" style="background:${col}"><div class="t">🎯 Turno de ${esc(cur.name)}</div><div class="h">${hint()}</div></div>`;document.title='Chopsticks'}
+  let h=b+`<div class="log">${esc(G.msg||'')}</div><div class="players">`;
+  G.players.forEach((p,i)=>{
+    const t=i===G.turn&&!over,cls='card pl '+(alive(p)?(t?'turn':'idle'):'dead');
+    h+=`<div class="${cls}" style="${t?'border-color:'+COL[i]:''}"><h3><span><span class="dot" style="background:${COL[i]}"></span>${esc(p.name)}${ON&&p.uid===MYID?' (tú)':''}</span>${!alive(p)?'<span>💀</span>':t?`<span class="badge" style="background:${COL[i]}">TURNO</span>`:''}</h3><div class="hands">${handHTML(p,i,0)}${handHTML(p,i,1)}</div></div>`;
+  });
+  h+='</div><div class="row center" style="margin-top:12px">';
+  if(over){
+    if(!ON)h+='<button onclick="startOff2()">Jugar otra vez</button>';
+    else if(G.players[0].uid===MYID)h+='<button onclick="startOn()">Revancha</button>';
+    else h+='<span class="sub">El anfitrión puede pedir revancha</span>';
+  }else if(mine&&G.split)h+=`<button class="sec" onclick="splitting=!splitting;sel=null;render()">${splitting?'Cancelar reparto':'🔄 Repartir dedos'}</button>`;
+  h+=`<button class="sec" onclick="${ON?'leave()':"go('menu')"}">Salir</button></div>`;
+  if(splitting&&mine){
+    const o=splitOptions(cur);
+    h+='<div class="card" style="margin-top:12px"><div style="text-align:center;margin-bottom:8px">Nuevo reparto (mano 1 / mano 2)</div><div class="splitbox">'+(o.length?o.map(x=>`<button onclick="doSplit(${x[0]},${x[1]})">${x[0]} / ${x[1]}</button>`).join(''):'<span class="sub">No hay repartos posibles.</span>')+'</div></div>';
+  }
+  h+=`<div class="err">${esc(S.err)}</div>`;
+  app.innerHTML=h;
+}
+function hint(){return splitting?'Elige cómo repartir tus dedos':sel===null?'① Elige una de tus manos':'② Toca una mano rival (borde verde)'}
+function startOff2(){
+  G.players.forEach(p=>p.hands=[1,1]);G.turn=0;G.status='play';G.winner=-1;G.msg='¡Empieza la partida!';sel=null;splitting=false;render();
+}
+render();
+</script>
+</body>
+</html>
