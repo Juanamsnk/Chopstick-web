@@ -52,6 +52,7 @@ label{display:block;margin:8px 0}
 .err{color:#e03131;text-align:center;margin:6px 0}
 .win{font-size:1.5rem;text-align:center}
 </style>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
 <body>
 <main>
@@ -65,10 +66,8 @@ const COL=['#e8590c','#1c7ed6','#2f9e44','#ae3ec9'];
 let V='menu',S={n:2,names:['Jugador 1','Jugador 2','Jugador 3','Jugador 4'],split:true,myName:'',joinCode:'',err:''};
 let G=null,sel=null,splitting=false,ON=null,DB=null,MYID=null;
 
-(async()=>{try{
-  const db=await claude.use('db'),us=await claude.use('user');
-  if(db&&us){MYID=await us.id();try{S.myName=(await us.me()).name||''}catch(e){} if(MYID){DB=db;if(V==='menu')render()}}
-}catch(e){}})();
+function rid(){return Math.random().toString(36).slice(2,10)}
+MYID=rid();DB=typeof Peer!=='undefined';
 
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const alive=p=>p.hands[0]>0||p.hands[1]>0;
@@ -87,7 +86,7 @@ function mineNow(){
 }
 function commit(g){
   sel=null;splitting=false;G=g;render();
-  if(ON)ON.ref.set(g).catch(()=>{S.err='No se pudo enviar la jugada';render()});
+  if(ON)send(g);
 }
 function splitOptions(p){
   const t=p.hands[0]+p.hands[1],r=[];
@@ -150,38 +149,52 @@ function onMenu(){
   <div class="err">${esc(S.err)}</div></div>`;
 }
 const myNm=()=>(S.myName||'').trim()||'Jugador';
-async function createGame(){
-  try{
-    const A='ABCDEFGHJKMNPQRSTUVWXYZ';let code,ref;
-    for(let t=0;t<5;t++){code=Array.from({length:4},()=>A[Math.random()*A.length|0]).join('');ref=DB.doc('games/'+code);if(!(await ref.get()).exists)break}
-    await ref.set({players:[{name:myNm(),hands:[1,1],uid:MYID}],turn:0,status:'lobby',split:S.split,msg:'',winner:-1});
-    enter(code);
-  }catch(e){S.err='No se pudo crear la partida';render()}
+function bcast(g){ON.conns.forEach(c=>{try{c.send({t:'state',g})}catch(e){}})}
+function send(g){try{ON.host?bcast(g):ON.conn.send({t:'state',g})}catch(e){S.err='Error al enviar la jugada';render()}}
+function apply(g){
+  if(!G||G.turn!==g.turn||G.status!==g.status){sel=null;splitting=false}
+  G=g;V='game';render();
 }
-async function joinGame(){
-  const code=(S.joinCode||'').trim().toUpperCase();
-  try{
-    const ref=DB.doc('games/'+code),s=await ref.get();
-    if(!s.exists){S.err='No existe esa partida';return render()}
-    const g=s.data();
-    if(!g.players.some(p=>p.uid===MYID)){
-      if(g.status!=='lobby'){S.err='La partida ya empezó';return render()}
-      if(g.players.length>=4){S.err='Partida llena (máx. 4)';return render()}
-      g.players.push({name:myNm(),hands:[1,1],uid:MYID});await ref.update({players:g.players});
+function hostData(c,d){
+  if(d.t==='join'){
+    if(!G.players.some(p=>p.uid===d.uid)){
+      if(G.status!=='lobby'){c.send({t:'err',m:'La partida ya empezó'});return}
+      if(G.players.length>=4){c.send({t:'err',m:'Partida llena (máx. 4)'});return}
+      G.players.push({name:d.name,hands:[1,1],uid:d.uid});
     }
-    enter(code);
-  }catch(e){S.err='No se pudo unir';render()}
+    c.uid=d.uid;render();bcast(G);
+  }else if(d.t==='state'&&c.uid){
+    const cur=G.players[G.turn];
+    if(G.status==='play'&&cur&&cur.uid===c.uid){apply(d.g);bcast(G)}
+  }
 }
-function enter(code){
-  if(ON&&ON.unsub)ON.unsub();
-  const ref=DB.doc('games/'+code);ON={code,ref,unsub:null};
-  ON.unsub=ref.onSnapshot(s=>{
-    if(!s.exists)return;const g=s.data();
-    if(!G||G.turn!==g.turn||G.status!==g.status){sel=null;splitting=false}
-    G=g;V='game';render();
+function createGame(){
+  const A='ABCDEFGHJKMNPQRSTUVWXYZ';
+  const code=Array.from({length:4},()=>A[Math.random()*A.length|0]).join('');
+  const peer=new Peer('chopsticks-'+code);
+  peer.on('error',e=>{if(e.type==='unavailable-id'){peer.destroy();createGame()}else{S.err='Error de conexión ('+e.type+')';render()}});
+  peer.on('open',()=>{
+    ON={host:true,code,peer,conns:[]};
+    G={players:[{name:myNm(),hands:[1,1],uid:MYID}],turn:0,status:'lobby',split:S.split,msg:'',winner:-1};
+    V='game';render();
+  });
+  peer.on('connection',c=>{ON.conns.push(c);c.on('data',d=>hostData(c,d));c.on('close',()=>{ON.conns=ON.conns.filter(x=>x!==c)})});
+}
+function joinGame(){
+  const code=(S.joinCode||'').trim().toUpperCase();
+  if(code.length!==4){S.err='Escribe el código de 4 letras';return render()}
+  const peer=new Peer();
+  const fail=m=>{S.err=m;try{peer.destroy()}catch(e){}ON=null;G=null;V='on';render()};
+  peer.on('error',e=>fail(e.type==='peer-unavailable'?'No existe esa partida':'Error de conexión'));
+  peer.on('open',()=>{
+    const conn=peer.connect('chopsticks-'+code,{reliable:true});
+    ON={host:false,code,peer,conn};
+    conn.on('open',()=>conn.send({t:'join',uid:MYID,name:myNm()}));
+    conn.on('data',d=>{if(d.t==='state')apply(d.g);else if(d.t==='err')fail(d.m)});
+    conn.on('close',()=>{if(ON&&ON.conn===conn)fail('El anfitrión se desconectó')});
   });
 }
-function leave(){if(ON&&ON.unsub)ON.unsub();ON=null;G=null;go('menu')}
+function leave(){if(ON&&ON.peer){try{ON.peer.destroy()}catch(e){}}ON=null;G=null;go('menu')}
 function lobby(){
   const host=G.players[0].uid===MYID;
   document.title='Chopsticks · sala';
@@ -192,7 +205,7 @@ function lobby(){
 }
 function startOn(){
   const g=clone(G);g.status='play';g.turn=0;g.msg='¡Empieza la partida!';g.winner=-1;
-  g.players.forEach(p=>p.hands=[1,1]);ON.ref.set(g);
+  g.players.forEach(p=>p.hands=[1,1]);commit(g);
 }
 function handHTML(p,pi,hi){
   const n=p.hands[hi],out=n===0,mine=mineNow();
