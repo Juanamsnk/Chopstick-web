@@ -53,6 +53,14 @@ label{display:block;margin:8px 0}
 .opp .f{border-radius:2px 2px 6px 6px}
 .opp .palm{border-radius:12px 12px 0 0;margin-top:0;margin-bottom:-4px}
 .players.me{margin-top:14px}
+.hand{position:relative}
+.hand:disabled{opacity:1}
+.tag{position:absolute;top:-11px;left:50%;transform:translateX(-50%);white-space:nowrap;color:#fff;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:99px;z-index:2}
+.atk.anim,.spl.anim{animation:atk .5s}
+.hit.anim{animation:hit .5s}
+@keyframes atk{40%{transform:scale(1.1)}}
+@keyframes hit{20%{transform:translateX(-6px)}40%{transform:translateX(6px)}60%{transform:translateX(-4px)}80%{transform:translateX(3px)}}
+.log{font-size:1.05rem;color:var(--ink)}
 .splitbox{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
 .code{font-size:2.6rem;font-weight:800;letter-spacing:.3em;text-align:center;margin:6px 0}
 .err{color:#e03131;text-align:center;margin:6px 0}
@@ -70,7 +78,7 @@ label{display:block;margin:8px 0}
 const app=document.getElementById('app');
 const COL=['#e8590c','#1c7ed6','#2f9e44','#ae3ec9'];
 let V='menu',S={n:2,names:['Jugador 1','Jugador 2','Jugador 3','Jugador 4'],split:true,myName:'',joinCode:'',err:''};
-let G=null,sel=null,splitting=false,ON=null,DB=null,MYID=null;
+let G=null,sel=null,splitting=false,ON=null,DB=null,MYID=null,shownSeq=0,FRESH=false;
 
 function rid(){return Math.random().toString(36).slice(2,10)}
 MYID=rid();DB=typeof Peer!=='undefined';
@@ -97,11 +105,11 @@ function commit(g){
 function splitOptions(p){
   const t=p.hands[0]+p.hands[1],r=[];
   const sw=p.hands[0]>p.hands[1],cm=Math.min(...p.hands),cx=Math.max(...p.hands);
-  for(let a=1;a<=4;a++){const b=t-a;if(b>=a&&b<=4&&!(a===cm&&b===cx))r.push(sw?[b,a]:[a,b])}
+  for(let a=0;a<=4;a++){const b=t-a;if(b>=a&&b<=4&&!(a===cm&&b===cx)){r.push(sw?[b,a]:[a,b]);if(cm===cx&&a!==b)r.push(sw?[a,b]:[b,a])}}
   return r;
 }
 function doSplit(a,b){
-  const g=clone(G),p=g.players[g.turn];p.hands=[a,b];
+  const g=clone(G),p=g.players[g.turn];p.hands=[a,b];g.last={t:'s',p:g.turn,seq:Date.now()};
   g.msg=`${p.name} repartió sus dedos: ${a} / ${b}`;advance(g);commit(g);
 }
 function clickHand(pi,hi){
@@ -111,7 +119,7 @@ function clickHand(pi,hi){
   if(sel===null)return;
   const g=clone(G),att=g.players[g.turn],tg=g.players[pi];
   const v=tg.hands[hi]+att.hands[sel],k=v===5,nv=v>5?v-5:v;
-  tg.hands[hi]=k?0:nv;
+  tg.hands[hi]=k?0:nv;g.last={t:'a',fp:g.turn,fh:sel,tp:pi,th:hi,a:att.hands[sel],nv:nv,k:k,wrap:v>5,seq:Date.now()};
   g.msg=`${att.name} tocó a ${tg.name}: ${k?'¡mano eliminada! ':'ahora tiene '+nv+' dedos'}`;
   advance(g);commit(g);
 }
@@ -211,7 +219,7 @@ function lobby(){
   <div class="row center" style="margin-top:10px">${host?`<button ${G.players.length<2?'disabled':''} onclick="startOn()">Empezar (${G.players.length}/4)</button>`:'<span class="sub">Esperando a que el anfitrión empiece…</span>'}<button class="sec" onclick="leave()">Salir</button></div></div>`;
 }
 function startOn(){
-  const g=clone(G);g.status='play';g.turn=0;g.msg='¡Empieza la partida!';g.winner=-1;
+  const g=clone(G);g.status='play';g.turn=0;g.msg='¡Empieza la partida!';g.winner=-1;g.last=null;
   g.players.forEach(p=>p.hands=[1,1]);commit(g);
 }
 function handHTML(p,pi,hi){
@@ -219,10 +227,17 @@ function handHTML(p,pi,hi){
   let c='hand h'+hi+(out?' out':'');
   if(mine&&pi===G.turn&&!out){c+=sel===hi?' sel':(sel===null&&!splitting?' pick':'')}
   if(mine&&pi!==G.turn&&!out&&sel!==null&&!splitting)c+=' target';
+  let fx='',st='',tag='';const L=G.last;
+  if(L&&L.t==='a'){
+    if(L.fp===pi&&L.fh===hi){fx=' atk';st='border-color:'+COL[L.fp];tag=`<span class="tag" style="background:${COL[L.fp]}">Ataca</span>`}
+    if(L.tp===pi&&L.th===hi){fx=' hit';st='border-color:#e03131';tag=`<span class="tag" style="background:#e03131">${L.k?'+'+L.a+' Eliminada':L.wrap?'+'+L.a+' pasa a '+L.nv:'+'+L.a}</span>`}
+  }else if(L&&L.t==='s'&&L.p===pi){fx=' spl';st='border-color:'+COL[pi];tag=`<span class="tag" style="background:${COL[pi]}">Reparte</span>`}
+  if(FRESH&&fx)fx+=' anim';
   let f='';for(let k=0;k<4;k++)f+=`<div class="f ${k<n?'up':'dn'}"></div>`;
-  return `<button class="${c}" ${out||G.status!=='play'?'disabled':''} onclick="clickHand(${pi},${hi})" aria-label="${esc(p.name)} mano ${hi+1}"><div class="fingers">${f}</div><div class="palm"></div><div class="num">${out?'X':n}</div></button>`;
+  return `<button class="${c}${fx}" style="${st}" ${out||G.status!=='play'?'disabled':''} onclick="clickHand(${pi},${hi})" aria-label="${esc(p.name)} mano ${hi+1}"><div class="fingers">${f}</div><div class="palm"></div><div class="num">${out?'X':n}</div>${tag}</button>`;
 }
 function game(){
+  FRESH=!!(G.last&&G.last.seq!==shownSeq);
   const cur=G.players[G.turn],mine=mineNow(),over=G.status==='over',col=COL[G.turn];
   let b;
   if(over){const w=G.players[G.winner];b=`<div id="banner" style="background:${COL[G.winner]}"><div class="t">¡${esc(w.name)} gana!</div>${ON&&w.uid===MYID?'<div class="h">¡Has ganado!</div>':''}</div>`;document.title='Fin'}
@@ -248,11 +263,11 @@ function game(){
     h+='<div class="card" style="margin-top:12px"><div style="text-align:center;margin-bottom:8px">Nuevo reparto (mano 1 / mano 2)</div><div class="splitbox">'+(o.length?o.map(x=>`<button onclick="doSplit(${x[0]},${x[1]})">${x[0]} / ${x[1]}</button>`).join(''):'<span class="sub">No hay repartos posibles.</span>')+'</div></div>';
   }
   h+=`<div class="err">${esc(S.err)}</div>`;
-  app.innerHTML=h;
+  app.innerHTML=h;if(G.last)shownSeq=G.last.seq;
 }
 function hint(){return splitting?'Elige cómo repartir tus dedos':sel===null?'1) Elige una de tus manos':'2) Toca una mano rival (borde verde)'}
 function startOff2(){
-  G.players.forEach(p=>p.hands=[1,1]);G.turn=0;G.status='play';G.winner=-1;G.msg='¡Empieza la partida!';sel=null;splitting=false;render();
+  G.players.forEach(p=>p.hands=[1,1]);G.turn=0;G.last=null;G.status='play';G.winner=-1;G.msg='¡Empieza la partida!';sel=null;splitting=false;render();
 }
 render();
 </script>
