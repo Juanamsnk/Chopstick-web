@@ -255,9 +255,11 @@ function aiMove(){
   const h=[G.players[0].hands.slice(),G.players[1].hands.slice()],sp=G.split,ms=mv(h,1,sp);
   if(!ms.length)return;
   let m;
-  if(AI==='easy'||(AI==='medium'&&Math.random()<.25))m=ms[Math.random()*ms.length|0];
+  const r=Math.random();
+  const D=AI==='easy'?(r<.3?0:1):AI==='medium'?(r<.15?1:r<.85?2:3):(r<.2?2:3);
+  if(D===0)m=ms[Math.random()*ms.length|0];
   else{
-    const D=AI==='medium'?2:12;let best=-1e9,bs=[];
+    let best=-1e9,bs=[];
     for(const x of ms){const v=-nm(ap(h,1,x),0,D-1,sp);if(v>best){best=v;bs=[x]}else if(v===best)bs.push(x)}
     m=bs[Math.random()*bs.length|0];
   }
