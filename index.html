@@ -78,7 +78,7 @@ label{display:block;margin:8px 0}
 const app=document.getElementById('app');
 const COL=['#e8590c','#1c7ed6','#2f9e44','#ae3ec9'];
 let V='menu',S={n:2,names:['Jugador 1','Jugador 2','Jugador 3','Jugador 4'],split:true,myName:'',joinCode:'',err:''};
-let G=null,sel=null,splitting=false,ON=null,DB=null,MYID=null,shownSeq=0,FRESH=false;
+let G=null,sel=null,splitting=false,ON=null,DB=null,MYID=null,shownSeq=0,FRESH=false,AI=null;
 
 function rid(){return Math.random().toString(36).slice(2,10)}
 MYID=rid();DB=typeof Peer!=='undefined';
@@ -96,10 +96,10 @@ function advance(g){
 }
 function mineNow(){
   if(!G||G.status!=='play')return false;
-  return ON?G.players[G.turn].uid===MYID:true;
+  return ON?G.players[G.turn].uid===MYID:(AI?G.turn===0:true);
 }
 function commit(g){
-  sel=null;splitting=false;G=g;render();
+  sel=null;splitting=false;G=g;render();aiSchedule();
   if(ON)send(g);
 }
 function splitOptions(p){
@@ -128,12 +128,14 @@ function clickHand(pi,hi){
 function render(){
   if(V==='menu')return menu();
   if(V==='off')return offSetup();
+  if(V==='ai')return aiSetup();
   if(V==='on')return onMenu();
   if(V==='game')return G&&G.status==='lobby'?lobby():game();
 }
 function menu(){
   document.title='Chopsticks';
   app.innerHTML=`<div class="card"><button class="big" onclick="go('off')">Modo offline<br><small style="font-weight:400">Varios jugadores en el mismo dispositivo</small></button>
+  <button class="big" onclick="go('ai')">Contra la máquina<br><small style="font-weight:400">Tres niveles de dificultad</small></button>
   <button class="big" ${DB?'':'disabled'} onclick="go('on')">Modo online<br><small style="font-weight:400">${DB?'Cada jugador en su dispositivo':'Requiere abrir el enlace con sesión iniciada'}</small></button></div>${rules()}`;
 }
 function rules(){return `<div class="card"><b>Reglas</b><ul style="margin:6px 0;padding-left:20px;line-height:1.5">
@@ -150,7 +152,7 @@ function offSetup(){
   app.innerHTML=h;
 }
 function startOff(){
-  ON=null;
+  ON=null;AI=null;
   G={players:[],turn:0,status:'play',split:S.split,msg:'¡Empieza la partida!',winner:-1};
   for(let i=0;i<S.n;i++)G.players.push({name:(S.names[i]||'').trim()||'Jugador '+(i+1),hands:[1,1],uid:''});
   sel=null;splitting=false;V='game';render();
@@ -210,6 +212,70 @@ function joinGame(){
   });
 }
 function leave(){if(ON&&ON.peer){try{ON.peer.destroy()}catch(e){}}ON=null;G=null;go('menu')}
+const MEMO=new Map();
+function mv(h,t,sp){
+  const me=h[t],op=h[1-t],r=[];
+  for(let i=0;i<2;i++)if(me[i])for(let j=0;j<2;j++)if(op[j])r.push({t:'a',h:i,p:1-t,th:j});
+  if(sp)splitOptions({hands:me}).forEach(o=>r.push({t:'s',a:o[0],b:o[1]}));
+  return r;
+}
+function ap(h,t,m){
+  const n=[h[0].slice(),h[1].slice()];
+  if(m.t==='s')n[t]=[m.a,m.b];
+  else{const v=n[1-t][m.th]+n[t][m.h];n[1-t][m.th]=v===5?0:v>5?v-5:v}
+  return n;
+}
+const al=x=>(x[0]>0)+(x[1]>0);
+function nm(h,t,d,sp){
+  if(!al(h[t]))return -(1000+d);
+  if(!al(h[1-t]))return 1000+d;
+  if(d===0)return 20*(al(h[t])-al(h[1-t]));
+  const key=h[0]+'|'+h[1]+'|'+t+'|'+d+'|'+sp;
+  if(MEMO.has(key))return MEMO.get(key);
+  let best=-1e9;
+  for(const m of mv(h,t,sp)){const v=-nm(ap(h,t,m),1-t,d-1,sp);if(v>best)best=v}
+  MEMO.set(key,best);return best;
+}
+function applyMove(g,m){
+  const p=g.players[g.turn];
+  if(m.t==='s'){
+    p.hands=[m.a,m.b];g.msg=`${p.name} repartió sus dedos: ${m.a} / ${m.b}`;
+    g.last={t:'s',p:g.turn,seq:Date.now()};
+  }else{
+    const tg=g.players[m.p],v=tg.hands[m.th]+p.hands[m.h],k=v===5,nv=v>5?v-5:v;
+    tg.hands[m.th]=k?0:nv;
+    g.msg=`${p.name} tocó a ${tg.name}: ${k?'¡mano eliminada!':'ahora tiene '+nv+' dedos'}`;
+    g.last={t:'a',fp:g.turn,fh:m.h,tp:m.p,th:m.th,a:p.hands[m.h],nv:nv,k:k,wrap:v>5,seq:Date.now()};
+  }
+  advance(g);return g;
+}
+function aiSchedule(){if(AI&&!ON&&G&&G.status==='play'&&G.turn===1)setTimeout(aiMove,1000)}
+function aiMove(){
+  if(!AI||ON||V!=='game'||!G||G.status!=='play'||G.turn!==1)return;
+  const h=[G.players[0].hands.slice(),G.players[1].hands.slice()],sp=G.split,ms=mv(h,1,sp);
+  if(!ms.length)return;
+  let m;
+  if(AI==='easy'||(AI==='medium'&&Math.random()<.25))m=ms[Math.random()*ms.length|0];
+  else{
+    const D=AI==='medium'?2:12;let best=-1e9,bs=[];
+    for(const x of ms){const v=-nm(ap(h,1,x),0,D-1,sp);if(v>best){best=v;bs=[x]}else if(v===best)bs.push(x)}
+    m=bs[Math.random()*bs.length|0];
+  }
+  commit(applyMove(clone(G),m));
+}
+function aiSetup(){
+  S.lvl=S.lvl||'medium';
+  const L=[['easy','Fácil'],['medium','Medio'],['hard','Difícil']];
+  app.innerHTML=`<div class="card"><b>Dificultad</b><div class="row" style="margin:8px 0">${L.map(l=>`<button class="${S.lvl===l[0]?'':'sec'}" onclick="S.lvl='${l[0]}';render()">${l[1]}</button>`).join('')}</div>
+  <b>Tu nombre</b><input type="text" maxlength="14" value="${esc(S.names[0])}" oninput="S.names[0]=this.value">
+  <label><input type="checkbox" ${S.split?'checked':''} onchange="S.split=this.checked"> Permitir repartir dedos</label>
+  <div class="row"><button onclick="startAI()">Empezar</button><button class="sec" onclick="go('menu')">Volver</button></div></div>`;
+}
+function startAI(){
+  ON=null;AI=S.lvl||'medium';MEMO.clear();
+  G={players:[{name:(S.names[0]||'').trim()||'Jugador 1',hands:[1,1],uid:''},{name:'Máquina',hands:[1,1],uid:''}],turn:0,status:'play',split:S.split,msg:'¡Empieza la partida!',winner:-1,last:null};
+  sel=null;splitting=false;V='game';render();
+}
 function lobby(){
   const host=G.players[0].uid===MYID;
   document.title='Chopsticks · sala';
@@ -227,7 +293,7 @@ function handHTML(p,pi,hi){
   let c='hand h'+hi+(out?' out':'');
   if(mine&&pi===G.turn&&!out){c+=sel===hi?' sel':(sel===null&&!splitting?' pick':'')}
   if(mine&&pi!==G.turn&&!out&&sel!==null&&!splitting)c+=' target';
-  let fx='',st='',tag='';const L=G.last;
+  let fx='',st='',tag='';const L=(sel!==null&&mine)?null:G.last;
   if(L&&L.t==='a'){
     if(L.fp===pi&&L.fh===hi){fx=' atk';st='border-color:'+COL[L.fp];tag=`<span class="tag" style="background:${COL[L.fp]}">Ataca</span>`}
     if(L.tp===pi&&L.th===hi){fx=' hit';st='border-color:#e03131';tag=`<span class="tag" style="background:#e03131">${L.k?'+'+L.a+' Eliminada':L.wrap?'+'+L.a+' pasa a '+L.nv:'+'+L.a}</span>`}
@@ -265,7 +331,7 @@ function game(){
   h+=`<div class="err">${esc(S.err)}</div>`;
   app.innerHTML=h;if(G.last)shownSeq=G.last.seq;
 }
-function hint(){return splitting?'Elige cómo repartir tus dedos':sel===null?'1) Elige una de tus manos':'2) Toca una mano rival (borde verde)'}
+function hint(){if(AI&&!ON&&G.turn===1)return 'La máquina está pensando...';return splitting?'Elige cómo repartir tus dedos':sel===null?'1) Elige una de tus manos':'2) Toca una mano rival (borde verde)'}
 function startOff2(){
   G.players.forEach(p=>p.hands=[1,1]);G.turn=0;G.last=null;G.status='play';G.winner=-1;G.msg='¡Empieza la partida!';sel=null;splitting=false;render();
 }
